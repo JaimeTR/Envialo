@@ -16,7 +16,6 @@ import {
   Palette,
   Server,
   UserRound,
-  Zap,
   RotateCw,
   RotateCcw,
   FileText,
@@ -84,12 +83,6 @@ function sortDevices(list: Device[]): Device[] {
   return [...list].sort((a, b) => (a.status === b.status ? 0 : a.status === "online" ? -1 : 1));
 }
 
-interface IncomingRequest {
-  alias: string;
-  fileName: string;
-  fileSize: number;
-}
-
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("devices");
   const [items, setItems] = useState<SelectedItem[]>([]);
@@ -145,7 +138,6 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
-  const [incomingRequest, setIncomingRequest] = useState<IncomingRequest | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -448,80 +440,6 @@ export default function Home() {
     setToastMsg(`Mensaje enviado a ${device.owner}: "${message.length > 40 ? `${message.slice(0, 40)}…` : message}"`);
   }
 
-  function handleSimulateIncoming() {
-    if (quickSave === "on") {
-      const now = new Date();
-      const id = `recv-${now.getTime()}`;
-      setReceivedItems((prev) => [
-        {
-          path: id,
-          name: "reporte_q3.pdf",
-          isDirectory: false,
-          size: 2_540_000,
-          id,
-          deviceName: "Ámbar",
-          status: "transferring",
-          progress: 0,
-          timestamp: now.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }),
-          createdAt: now.getTime(),
-          direction: "received",
-          savedPath: downloadPath,
-        },
-        ...prev,
-      ]);
-      simulateTransfer(id, "received", "accepted", `Recibido automáticamente de Ámbar (Marketing) — guardado en ${downloadPath}`);
-      return;
-    }
-    setIncomingRequest({ alias: "Ámbar (Marketing)", fileName: "reporte_q3.pdf", fileSize: 2_540_000 });
-  }
-
-  function handleAcceptIncoming() {
-    if (!incomingRequest) return;
-    const now = new Date();
-    const id = `recv-${now.getTime()}`;
-    setReceivedItems((prev) => [
-      {
-        path: id,
-        name: incomingRequest.fileName,
-        isDirectory: false,
-        size: incomingRequest.fileSize,
-        id,
-        deviceName: incomingRequest.alias,
-        status: "transferring",
-        progress: 0,
-        timestamp: now.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }),
-        createdAt: now.getTime(),
-        direction: "received",
-        savedPath: downloadPath,
-      },
-      ...prev,
-    ]);
-    setIncomingRequest(null);
-    simulateTransfer(id, "received", "accepted", `Archivo guardado en ${downloadPath}`);
-  }
-
-  function handleRejectIncoming() {
-    if (!incomingRequest) return;
-    const now = new Date();
-    setReceivedItems((prev) => [
-      {
-        path: `recv-${now.getTime()}`,
-        name: incomingRequest.fileName,
-        isDirectory: false,
-        size: incomingRequest.fileSize,
-        id: `recv-${now.getTime()}`,
-        deviceName: incomingRequest.alias,
-        status: "rejected",
-        timestamp: now.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }),
-        createdAt: now.getTime(),
-        direction: "received",
-      },
-      ...prev,
-    ]);
-    setIncomingRequest(null);
-    setToastMsg("Solicitud rechazada");
-  }
-
   function handleScanDevices() {
     if (isScanning) return;
     setIsScanning(true);
@@ -596,16 +514,6 @@ export default function Home() {
                       {quickSave === "favorites" && "Se guarda directo solo si viene de un dispositivo marcado como favorito."}
                       {quickSave === "on" && "Todo archivo entrante se guarda directo, sin preguntar."}
                     </p>
-
-                    <div className="mt-4">
-                      <StyledButton
-                        label="Simular solicitud entrante"
-                        variant="outline"
-                        size="sm"
-                        icon={<Zap className="w-3.5 h-3.5" />}
-                        onClick={handleSimulateIncoming}
-                      />
-                    </div>
                   </div>
 
                   <div className="shrink-0 flex items-center sm:self-center" data-tour="visibility-toggle">
@@ -1063,17 +971,6 @@ export default function Home() {
         onClose={() => setShowMessageModal(false)}
         onConfirm={handleSendMessage}
       />
-
-      {incomingRequest && (
-        <IncomingTransferModal
-          isOpen
-          senderAlias={incomingRequest.alias}
-          fileName={incomingRequest.fileName}
-          fileSize={incomingRequest.fileSize}
-          onAccept={handleAcceptIncoming}
-          onReject={handleRejectIncoming}
-        />
-      )}
 
       {incomingPairRequest && (
         <PairRequestModal
