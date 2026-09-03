@@ -1,15 +1,34 @@
-use crate::discovery::DiscoveryState;
-use crate::transfer::{self, TransferItemInput};
+use crate::discovery::{DiscoveryState, KnownDevice};
+use crate::transfer::{self, FileSource, FlattenedFile, TransferItemInput};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tiny_http::{Header, Method, Response, Server};
 
 pub const WEB_PORT: u16 = 51414;
+const PHONE_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Clone)]
+struct PendingPhoneFile {
+    id: String,
+    name: String,
+    size: u64,
+    from_alias: String,
+    path: PathBuf,
+}
+
+struct PhoneSession {
+    last_seen: Instant,
+}
 
 #[derive(Default)]
 pub struct WebServerState {
     running: Mutex<bool>,
     url: Mutex<Option<String>>,
+    phones: Mutex<HashMap<String, PhoneSession>>,
+    inbox: Mutex<HashMap<String, Vec<PendingPhoneFile>>>,
 }
 
 fn query_param(url: &str, key: &str) -> Option<String> {
@@ -37,6 +56,80 @@ fn html_header() -> Header {
     Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap()
 }
 
+/// Marks phone sessions that stopped polling as offline and prunes them.
+fn sweep_stale_phones(app: &AppHandle) {
+    let ws_state = app.state::<WebServerState>();
+    let mut phones = ws_state.phones.lock().unwrap();
+    let stale: Vec<String> = phones
+        .iter()
+        .filter(|(_, p)| p.last_seen.elapsed() > PHONE_TIMEOUT)
+        .map(|(id, _)| id.clone())
+        .collect();
+    if stale.is_empty() {
+        return;
+    }
+    for session in &stale {
+        phones.remove(session);
+    }
+    drop(phones);
+
+    let discovery = app.state::<DiscoveryState>();
+    let mut known = discovery.known_devices.lock().unwrap();
+    for session in stale {
+        let device_id = format!("phone-{session}");
+        if let Some(d) = known.get_mut(&device_id) {
+            d.status = "offline".to_string();
+        }
+        let _ = app.emit("device-lost", serde_json::json!({ "id": device_id }));
+    }
+}
+
+/// Called from transfer::send_transfer when the target is a "phone-<session>" id:
+/// copies the flattened files into that phone's inbox instead of streaming over TCP.
+pub fn deliver_to_phone(
+    app: &AppHandle,
+    session_id: &str,
+    from_alias: &str,
+    files: Vec<FlattenedFile>,
+) -> Result<(), String> {
+    let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    let inbox_dir = dir.join("phone_inbox").join(session_id);
+    std::fs::create_dir_all(&inbox_dir).map_err(|e| e.to_string())?;
+
+    let mut entries = Vec::new();
+    for file in files {
+        let file_id = uuid::Uuid::new_v4().to_string();
+        let dest = inbox_dir.join(&file_id);
+        match &file.source {
+            FileSource::Disk(path) => {
+                std::fs::copy(path, &dest).map_err(|e| e.to_string())?;
+            }
+            FileSource::Text(bytes) => {
+                std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
+            }
+        }
+        entries.push(PendingPhoneFile {
+            id: file_id,
+            name: file.relative_path.clone(),
+            size: file.size,
+            from_alias: from_alias.to_string(),
+            path: dest,
+        });
+    }
+
+    let ws_state = app.state::<WebServerState>();
+    ws_state
+        .inbox
+        .lock()
+        .unwrap()
+        .entry(session_id.to_string())
+        .or_default()
+        .extend(entries);
+    Ok(())
+}
+
+const ICON_BYTES: &[u8] = include_bytes!("../icons/128x128.png");
+
 const PAGE_HTML: &str = r##"<!doctype html>
 <html lang="es">
 <head>
@@ -44,53 +137,163 @@ const PAGE_HTML: &str = r##"<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Envialo</title>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
-    margin: 0; padding: 24px 16px 48px; min-height: 100vh;
-    background: #0b0d14; color: #e5e7eb;
+    margin: 0; padding: env(safe-area-inset-top, 0) 16px calc(env(safe-area-inset-bottom, 0) + 32px);
+    min-height: 100vh; background: #0b0d14; color: #e5e7eb;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
-  h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
-  p.subtitle { color: #9aa0ac; font-size: 13px; margin: 0 0 24px; }
+  .wrap { max-width: 480px; margin: 0 auto; padding-top: 28px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  header img { width: 40px; height: 40px; border-radius: 12px; }
+  h1 { font-size: 20px; font-weight: 700; margin: 0; }
+  p.subtitle { color: #9aa0ac; font-size: 13px; margin: 4px 0 22px; }
+
+  .tabs { display: flex; gap: 6px; background: #13161f; border: 1px solid #222738; border-radius: 14px; padding: 4px; margin-bottom: 18px; }
+  .tab-btn {
+    flex: 1; padding: 10px; border: none; border-radius: 10px; background: transparent;
+    color: #9aa0ac; font-weight: 600; font-size: 14px; cursor: pointer; transition: all .15s ease;
+  }
+  .tab-btn.active { background: #5050e1; color: white; }
+
   .card {
     background: #13161f; border: 1px solid #222738; border-radius: 20px;
-    padding: 20px; max-width: 420px; margin: 0 auto 16px;
+    padding: 20px; margin-bottom: 16px;
   }
   label { display: block; font-size: 12px; font-weight: 600; color: #9aa0ac; margin-bottom: 6px; }
-  select, input[type=file] {
+  select, input[type=file], input[type=text] {
     width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #2c3349;
-    background: #1c2130; color: #e5e7eb; font-size: 14px; margin-bottom: 16px;
+    background: #1c2130; color: #e5e7eb; font-size: 14px; margin-bottom: 16px; font-family: inherit;
   }
   button {
     width: 100%; padding: 13px; border-radius: 12px; border: none;
     background: #5050e1; color: white; font-weight: 700; font-size: 14px;
-    cursor: pointer;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
   }
   button:disabled { opacity: 0.5; }
-  #status { margin-top: 14px; font-size: 13px; text-align: center; min-height: 18px; }
+  button.secondary { background: #1c2130; border: 1px solid #2c3349; color: #e5e7eb; }
+  #status { margin-top: 14px; font-size: 13px; text-align: center; min-height: 18px; color: #9aa0ac; }
   #bar-wrap { height: 6px; border-radius: 999px; background: #2c3349; overflow: hidden; margin-top: 10px; display: none; }
-  #bar { height: 100%; width: 0%; background: #5050e1; transition: width .15s ease; }
+  #bar { height: 100%; width: 0%; background: linear-gradient(90deg,#5050e1,#7676ea); transition: width .15s ease; }
+
+  .alias-row { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .alias-row input { margin: 0; }
+
+  .inbox-item {
+    display: flex; align-items: center; gap: 12px; padding: 14px;
+    border: 1px solid #2c3349; border-radius: 14px; background: #1c2130; margin-bottom: 10px;
+  }
+  .inbox-item .icon {
+    width: 38px; height: 38px; border-radius: 10px; background: rgba(80,80,225,.15);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .inbox-item .meta { flex: 1; min-width: 0; }
+  .inbox-item .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .inbox-item .sub { font-size: 11px; color: #9aa0ac; margin-top: 2px; }
+  .inbox-item a.dl {
+    flex-shrink: 0; padding: 8px 12px; border-radius: 10px; background: #5050e1; color: white;
+    text-decoration: none; font-size: 12px; font-weight: 700;
+  }
+  .empty { text-align: center; padding: 40px 16px; color: #9aa0ac; font-size: 13px; }
+  .empty svg { opacity: .35; margin-bottom: 10px; }
+
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-  <h1>📡 Envialo</h1>
-  <p class="subtitle">Envía un archivo desde tu celular a un equipo de tu red local.</p>
+<div class="wrap">
+  <header>
+    <img src="/icon.png" alt="Envialo" />
+    <div>
+      <h1>Envialo</h1>
+    </div>
+  </header>
+  <p class="subtitle">Comparte con los equipos de tu red local, sin nube.</p>
 
-  <div class="card">
-    <label for="device">Dispositivo destino</label>
-    <select id="device"></select>
-
-    <label for="file">Archivo</label>
-    <input type="file" id="file" />
-
-    <button id="send">Enviar</button>
-
-    <div id="bar-wrap"><div id="bar"></div></div>
-    <div id="status"></div>
+  <div class="alias-row">
+    <div style="flex:1">
+      <label for="alias" style="margin-bottom:6px">Tu nombre en la red</label>
+      <input type="text" id="alias" placeholder="Mi celular" />
+    </div>
   </div>
 
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-send-btn">Enviar</button>
+    <button class="tab-btn" id="tab-receive-btn">Recibir</button>
+  </div>
+
+  <div id="tab-send">
+    <div class="card">
+      <label for="device">Dispositivo destino</label>
+      <select id="device"></select>
+
+      <label for="file">Archivo</label>
+      <input type="file" id="file" />
+
+      <button id="send">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+        Enviar
+      </button>
+
+      <div id="bar-wrap"><div id="bar"></div></div>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <div id="tab-receive" hidden>
+    <div id="inbox-list"></div>
+  </div>
+</div>
+
 <script>
+  const SEND_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5050e1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>';
+  const EMPTY_ICON = '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/></svg>';
+
+  function uuid() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
+
+  const SESSION = localStorage.getItem('envialo-session') || uuid();
+  localStorage.setItem('envialo-session', SESSION);
+
+  const aliasInput = document.getElementById('alias');
+  aliasInput.value = localStorage.getItem('envialo-alias') || 'Mi celular';
+  aliasInput.addEventListener('change', () => {
+    localStorage.setItem('envialo-alias', aliasInput.value || 'Mi celular');
+    register();
+  });
+
+  function fmtSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  async function register() {
+    try {
+      await fetch('/api/register?session=' + encodeURIComponent(SESSION) + '&alias=' + encodeURIComponent(aliasInput.value || 'Mi celular'), { method: 'POST' });
+    } catch (e) {}
+  }
+
+  const tabSendBtn = document.getElementById('tab-send-btn');
+  const tabReceiveBtn = document.getElementById('tab-receive-btn');
+  const tabSend = document.getElementById('tab-send');
+  const tabReceive = document.getElementById('tab-receive');
+  tabSendBtn.addEventListener('click', () => {
+    tabSendBtn.classList.add('active'); tabReceiveBtn.classList.remove('active');
+    tabSend.hidden = false; tabReceive.hidden = true;
+  });
+  tabReceiveBtn.addEventListener('click', () => {
+    tabReceiveBtn.classList.add('active'); tabSendBtn.classList.remove('active');
+    tabReceive.hidden = false; tabSend.hidden = true;
+    loadInbox();
+  });
+
   const deviceSelect = document.getElementById('device');
   const fileInput = document.getElementById('file');
   const sendBtn = document.getElementById('send');
@@ -102,8 +305,9 @@ const PAGE_HTML: &str = r##"<!doctype html>
     try {
       const res = await fetch('/api/devices');
       const devices = await res.json();
+      const current = deviceSelect.value;
       deviceSelect.innerHTML = '';
-      const online = devices.filter(d => d.status === 'online');
+      const online = devices.filter(d => d.status === 'online' && d.connectionType !== 'phone');
       if (online.length === 0) {
         const opt = document.createElement('option');
         opt.textContent = 'Ningún dispositivo en línea';
@@ -118,6 +322,7 @@ const PAGE_HTML: &str = r##"<!doctype html>
         opt.textContent = d.owner + ' (' + d.name + ')';
         deviceSelect.appendChild(opt);
       });
+      if (online.some(d => d.id === current)) deviceSelect.value = current;
     } catch (e) {
       statusEl.textContent = 'No se pudo cargar la lista de dispositivos.';
     }
@@ -136,7 +341,7 @@ const PAGE_HTML: &str = r##"<!doctype html>
     bar.style.width = '0%';
 
     const xhr = new XMLHttpRequest();
-    const url = '/api/send?target=' + encodeURIComponent(target) + '&name=' + encodeURIComponent(file.name) + '&alias=' + encodeURIComponent('Celular');
+    const url = '/api/send?target=' + encodeURIComponent(target) + '&name=' + encodeURIComponent(file.name) + '&alias=' + encodeURIComponent(aliasInput.value || 'Mi celular');
     xhr.open('POST', url);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) bar.style.width = Math.round((e.loaded / e.total) * 100) + '%';
@@ -158,8 +363,35 @@ const PAGE_HTML: &str = r##"<!doctype html>
     xhr.send(file);
   });
 
+  const inboxList = document.getElementById('inbox-list');
+  async function loadInbox() {
+    try {
+      const res = await fetch('/api/inbox?session=' + encodeURIComponent(SESSION));
+      const files = await res.json();
+      if (files.length === 0) {
+        inboxList.innerHTML = '<div class="empty">' + EMPTY_ICON + '<div>Nada por ahora</div></div>';
+        return;
+      }
+      inboxList.innerHTML = files.map(f => `
+        <div class="inbox-item">
+          <div class="icon">${SEND_ICON}</div>
+          <div class="meta">
+            <div class="name">${f.name}</div>
+            <div class="sub">de ${f.fromAlias} · ${fmtSize(f.size)}</div>
+          </div>
+          <a class="dl" href="/api/download/${f.id}" download="${f.name}">Descargar</a>
+        </div>
+      `).join('');
+    } catch (e) {}
+  }
+
+  register();
   loadDevices();
-  setInterval(loadDevices, 5000);
+  setInterval(() => {
+    register();
+    loadDevices();
+    if (!tabReceive.hidden) loadInbox();
+  }, 4000);
 </script>
 </body>
 </html>
@@ -197,12 +429,108 @@ pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<
                 continue;
             }
 
+            if method == Method::Get && url_str.starts_with("/icon.png") {
+                let png_header = Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..]).unwrap();
+                let resp = Response::from_data(ICON_BYTES).with_header(png_header);
+                let _ = request.respond(resp);
+                continue;
+            }
+
+            if method == Method::Post && url_str.starts_with("/api/register") {
+                let session = query_param(&url_str, "session").unwrap_or_default();
+                let alias = query_param(&url_str, "alias").unwrap_or_else(|| "Mi celular".to_string());
+                if !session.is_empty() {
+                    let ws_state = app.state::<WebServerState>();
+                    ws_state
+                        .phones
+                        .lock()
+                        .unwrap()
+                        .insert(session.clone(), PhoneSession { last_seen: Instant::now() });
+
+                    let device_id = format!("phone-{session}");
+                    let discovery = app.state::<DiscoveryState>();
+                    let is_new = !discovery.known_devices.lock().unwrap().contains_key(&device_id);
+                    discovery.known_devices.lock().unwrap().insert(
+                        device_id.clone(),
+                        KnownDevice {
+                            id: device_id.clone(),
+                            name: "Celular".to_string(),
+                            owner: alias.clone(),
+                            connection_type: "phone".to_string(),
+                            status: "online".to_string(),
+                        },
+                    );
+                    if is_new {
+                        let _ = app.emit(
+                            "device-found",
+                            serde_json::json!({ "id": device_id, "name": "Celular", "owner": alias, "connectionType": "phone", "status": "online" }),
+                        );
+                    }
+                }
+                let _ = request.respond(Response::from_string("{\"ok\":true}").with_header(json_header()));
+                continue;
+            }
+
             if method == Method::Get && url_str.starts_with("/api/devices") {
+                sweep_stale_phones(&app);
                 let discovery = app.state::<DiscoveryState>();
                 let list: Vec<_> = discovery.known_devices.lock().unwrap().values().cloned().collect();
                 let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
                 let resp = Response::from_string(json).with_header(json_header());
                 let _ = request.respond(resp);
+                continue;
+            }
+
+            if method == Method::Get && url_str.starts_with("/api/inbox") {
+                let session = query_param(&url_str, "session").unwrap_or_default();
+                let ws_state = app.state::<WebServerState>();
+                let files = ws_state.inbox.lock().unwrap().get(&session).cloned().unwrap_or_default();
+                let dto: Vec<_> = files
+                    .iter()
+                    .map(|f| serde_json::json!({ "id": f.id, "name": f.name, "size": f.size, "fromAlias": f.from_alias }))
+                    .collect();
+                let json = serde_json::to_string(&dto).unwrap_or_else(|_| "[]".to_string());
+                let _ = request.respond(Response::from_string(json).with_header(json_header()));
+                continue;
+            }
+
+            if method == Method::Get && url_str.starts_with("/api/download/") {
+                let file_id = url_str
+                    .trim_start_matches("/api/download/")
+                    .split('?')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let ws_state = app.state::<WebServerState>();
+                let mut inbox = ws_state.inbox.lock().unwrap();
+                let mut found: Option<PendingPhoneFile> = None;
+                for files in inbox.values_mut() {
+                    if let Some(pos) = files.iter().position(|f| f.id == file_id) {
+                        found = Some(files.remove(pos));
+                        break;
+                    }
+                }
+                drop(inbox);
+
+                match found {
+                    Some(file) => match std::fs::read(&file.path) {
+                        Ok(bytes) => {
+                            let _ = std::fs::remove_file(&file.path);
+                            let disposition = Header::from_bytes(
+                                &b"Content-Disposition"[..],
+                                format!("attachment; filename=\"{}\"", file.name).as_bytes(),
+                            )
+                            .unwrap();
+                            let _ = request.respond(Response::from_data(bytes).with_header(disposition));
+                        }
+                        Err(_) => {
+                            let _ = request.respond(Response::from_string("Not found").with_status_code(404));
+                        }
+                    },
+                    None => {
+                        let _ = request.respond(Response::from_string("Not found").with_status_code(404));
+                    }
+                }
                 continue;
             }
 

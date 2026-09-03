@@ -1,5 +1,5 @@
 export type DeviceStatus = "online" | "offline";
-export type DeviceConnectionType = "wifi" | "ethernet";
+export type DeviceConnectionType = "wifi" | "ethernet" | "phone";
 
 export interface Device {
   id: string;

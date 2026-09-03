@@ -49,15 +49,15 @@ pub struct TransferItemInput {
     pub text_content: Option<String>,
 }
 
-enum FileSource {
+pub(crate) enum FileSource {
     Disk(PathBuf),
     Text(Vec<u8>),
 }
 
-struct FlattenedFile {
-    relative_path: String,
-    size: u64,
-    source: FileSource,
+pub(crate) struct FlattenedFile {
+    pub(crate) relative_path: String,
+    pub(crate) size: u64,
+    pub(crate) source: FileSource,
 }
 
 struct PendingTransfer {
@@ -78,7 +78,7 @@ fn sanitize_component(name: &str) -> String {
     name.replace(['/', '\\'], "_")
 }
 
-fn flatten_items(items: &[TransferItemInput]) -> Result<Vec<FlattenedFile>, String> {
+pub(crate) fn flatten_items(items: &[TransferItemInput]) -> Result<Vec<FlattenedFile>, String> {
     let mut out = Vec::new();
     for item in items {
         if item.is_text {
@@ -147,6 +147,33 @@ pub fn send_transfer(
     my_alias: String,
     items: Vec<TransferItemInput>,
 ) -> Result<String, String> {
+    if let Some(session_id) = target_id.strip_prefix("phone-") {
+        let flattened = flatten_items(&items)?;
+        let transfer_id = Uuid::new_v4().to_string();
+        let session_id = session_id.to_string();
+        let target_id_for_thread = target_id.clone();
+        let transfer_id_for_thread = transfer_id.clone();
+        let app_for_thread = app.clone();
+        std::thread::spawn(move || {
+            let result = crate::webserver::deliver_to_phone(&app_for_thread, &session_id, &my_alias, flattened);
+            match result {
+                Ok(()) => {
+                    let _ = app_for_thread.emit(
+                        "send-result",
+                        serde_json::json!({ "transferId": transfer_id_for_thread, "targetId": target_id_for_thread, "status": "accepted" }),
+                    );
+                }
+                Err(e) => {
+                    let _ = app_for_thread.emit(
+                        "send-result",
+                        serde_json::json!({ "transferId": transfer_id_for_thread, "targetId": target_id_for_thread, "status": "failed", "error": e }),
+                    );
+                }
+            }
+        });
+        return Ok(transfer_id);
+    }
+
     let addr = discovery
         .peer_addresses
         .lock()
