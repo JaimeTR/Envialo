@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# tauri
+src-tauri/target/
+src-tauri/gen/
+
+# updater signing key — NEVER commit, keep in GitHub Actions secrets only
+src-tauri/*.key
+src-tauri/.updater-key-password.txt
+
+# misc
+.DS_Store
+*.log
