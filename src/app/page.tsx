@@ -950,7 +950,7 @@ export default function Home() {
                     label="Acceso desde celular"
                     description={
                       webServerUrl
-                        ? `Abre ${webServerUrl.url} en el navegador de tu celular (misma red). Si no carga, probá ${webServerUrl.ipUrl}`
+                        ? `Abre ${webServerUrl.ipUrl} en el navegador de tu celular (misma red). En iPhone/Mac también funciona ${webServerUrl.url}`
                         : "Solo disponible en la app de escritorio"
                     }
                     control={<Badge label={webServerUrl ? "Activo" : "Detenido"} variant={webServerUrl ? "success" : "neutral"} />}
