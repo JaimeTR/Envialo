@@ -11,6 +11,11 @@ tsconfig.tsbuildinfo
 src-tauri/target/
 src-tauri/gen/
 
+# real user files ever saved into a relative "Documentos/Envialo" path
+# during dev testing — must never be committed
+Documentos/
+src-tauri/Documentos/
+
 # updater signing key — NEVER commit, keep in GitHub Actions secrets only
 src-tauri/*.key
 src-tauri/.updater-key-password.txt
