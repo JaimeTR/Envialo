@@ -1,6 +1,8 @@
 use crate::discovery::{DiscoveryState, KnownDevice};
 use crate::transfer::{self, FileSource, FlattenedFile, TransferItemInput};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
+use qrcode::render::svg;
+use qrcode::QrCode;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,6 +20,19 @@ const FRIENDLY_HOST: &str = "envialo.local.";
 pub struct WebServerUrls {
     pub url: String,
     pub ip_url: String,
+    pub qr_svg: String,
+}
+
+fn build_qr_svg(text: &str) -> String {
+    QrCode::new(text.as_bytes())
+        .map(|code| {
+            code.render::<svg::Color>()
+                .min_dimensions(160, 160)
+                .dark_color(svg::Color("#0b0d14"))
+                .light_color(svg::Color("#ffffff"))
+                .build()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Clone)]
@@ -141,6 +156,7 @@ pub fn deliver_to_phone(
 }
 
 const ICON_BYTES: &[u8] = include_bytes!("../icons/128x128.png");
+const BRAZE_FONT_BYTES: &[u8] = include_bytes!("../../src/fonts/Braze.otf");
 
 const PAGE_HTML: &str = r##"<!doctype html>
 <html lang="es">
@@ -157,9 +173,11 @@ const PAGE_HTML: &str = r##"<!doctype html>
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   .wrap { max-width: 480px; margin: 0 auto; padding-top: 28px; }
-  header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
-  header img { width: 40px; height: 40px; border-radius: 12px; }
-  h1 { font-size: 20px; font-weight: 700; margin: 0; }
+  @font-face { font-family: "Braze"; src: url("/braze-font") format("opentype"); font-display: swap; }
+  header { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; margin-bottom: 4px; }
+  header img { width: 52px; height: 52px; border-radius: 14px; }
+  h1 { font-family: "Braze", -apple-system, sans-serif; font-size: 26px; font-weight: 400; letter-spacing: 0.04em; text-transform: uppercase; margin: 0; }
+  p.subtitle { text-align: center; }
   p.subtitle { color: #9aa0ac; font-size: 13px; margin: 4px 0 22px; }
 
   .tabs { display: flex; gap: 6px; background: #13161f; border: 1px solid #222738; border-radius: 14px; padding: 4px; margin-bottom: 18px; }
@@ -445,9 +463,11 @@ pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<
         Err(e) => log::error!("could not advertise envialo.local: {e}"),
     }
 
+    let qr_svg = build_qr_svg(&ip_url);
     let urls = WebServerUrls {
         url: friendly_url,
         ip_url,
+        qr_svg,
     };
     *state.urls.lock().unwrap() = Some(urls.clone());
     *state.running.lock().unwrap() = true;
@@ -467,6 +487,13 @@ pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<
             if method == Method::Get && url_str.starts_with("/icon.png") {
                 let png_header = Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..]).unwrap();
                 let resp = Response::from_data(ICON_BYTES).with_header(png_header);
+                let _ = request.respond(resp);
+                continue;
+            }
+
+            if method == Method::Get && url_str.starts_with("/braze-font") {
+                let font_header = Header::from_bytes(&b"Content-Type"[..], &b"font/otf"[..]).unwrap();
+                let resp = Response::from_data(BRAZE_FONT_BYTES).with_header(font_header);
                 let _ = request.respond(resp);
                 continue;
             }

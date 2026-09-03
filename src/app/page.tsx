@@ -955,6 +955,18 @@ export default function Home() {
                     }
                     control={<Badge label={webServerUrl ? "Activo" : "Detenido"} variant={webServerUrl ? "success" : "neutral"} />}
                   />
+                  {webServerUrl && (
+                    <div className="flex items-center gap-4 p-3.5 rounded-xl border border-slate-200 bg-white dark:border-[#222738] dark:bg-[#1c2130]/60">
+                      <div
+                        className="shrink-0 w-24 h-24 bg-white rounded-lg p-1.5 border border-slate-200"
+                        dangerouslySetInnerHTML={{ __html: webServerUrl.qrSvg }}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Escaneá para abrir en tu celular</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-500 mt-0.5">Cámara del celular, misma red wifi/cable</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </BentoPanel>
 

@@ -77,7 +77,36 @@ fn register_self(
 
     let fullname = service_info.get_fullname().to_string();
     mdns.register(service_info).map_err(|e| e.to_string())?;
+
+    // List ourselves too, so the mobile page (served by this same PC) can offer
+    // "send to this computer" as a target — the mDNS browse loop only ever lists
+    // *other* peers, since a device doesn't discover itself.
+    let discovery_state = app.state::<DiscoveryState>();
+    discovery_state
+        .peer_addresses
+        .lock()
+        .unwrap()
+        .insert(device_id.clone(), (ip.to_string(), SERVICE_PORT));
+    discovery_state.known_devices.lock().unwrap().insert(
+        device_id.clone(),
+        KnownDevice {
+            id: device_id.clone(),
+            name: hostname_display,
+            owner: alias.to_string(),
+            connection_type: connection_type.to_string(),
+            status: "online".to_string(),
+        },
+    );
+
     Ok(fullname)
+}
+
+fn unlist_self(app: &AppHandle) {
+    if let Ok(device_id) = get_or_create_device_id(app) {
+        let discovery_state = app.state::<DiscoveryState>();
+        discovery_state.peer_addresses.lock().unwrap().remove(&device_id);
+        discovery_state.known_devices.lock().unwrap().remove(&device_id);
+    }
 }
 
 fn spawn_browse_thread(app: AppHandle, mdns: ServiceDaemon) {
@@ -187,6 +216,8 @@ pub fn start_discovery(
     if visible {
         let fullname = register_self(&app, &mdns, &alias, &connection_type)?;
         *state.self_fullname.lock().unwrap() = Some(fullname);
+    } else {
+        unlist_self(&app);
     }
 
     Ok(())
@@ -215,6 +246,8 @@ pub fn set_presence(
     if visible {
         let fullname = register_self(&app, &mdns, &alias, &connection_type)?;
         *fullname_guard = Some(fullname);
+    } else {
+        unlist_self(&app);
     }
 
     Ok(())

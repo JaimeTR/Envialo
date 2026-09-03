@@ -5,6 +5,7 @@ import { isTauri } from "@/lib/platform";
 export interface WebServerUrls {
   url: string;
   ipUrl: string;
+  qrSvg: string;
 }
 
 export function useWebServer(): WebServerUrls | null {
