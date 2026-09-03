@@ -1,5 +1,7 @@
 use crate::discovery::{DiscoveryState, KnownDevice};
 use crate::transfer::{self, FileSource, FlattenedFile, TransferItemInput};
+use mdns_sd::{ServiceDaemon, ServiceInfo};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -9,6 +11,14 @@ use tiny_http::{Header, Method, Response, Server};
 
 pub const WEB_PORT: u16 = 51414;
 const PHONE_TIMEOUT: Duration = Duration::from_secs(15);
+const FRIENDLY_HOST: &str = "envialo.local.";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WebServerUrls {
+    pub url: String,
+    pub ip_url: String,
+}
 
 #[derive(Clone)]
 struct PendingPhoneFile {
@@ -26,9 +36,11 @@ struct PhoneSession {
 #[derive(Default)]
 pub struct WebServerState {
     running: Mutex<bool>,
-    url: Mutex<Option<String>>,
+    urls: Mutex<Option<WebServerUrls>>,
     phones: Mutex<HashMap<String, PhoneSession>>,
     inbox: Mutex<HashMap<String, Vec<PendingPhoneFile>>>,
+    // kept alive for the app's lifetime — dropping it would stop advertising envialo.local
+    _mdns: Mutex<Option<ServiceDaemon>>,
 }
 
 fn query_param(url: &str, key: &str) -> Option<String> {
@@ -398,23 +410,46 @@ const PAGE_HTML: &str = r##"<!doctype html>
 "##;
 
 #[tauri::command]
-pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<String, String> {
+pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<WebServerUrls, String> {
     log::info!("start_web_server invoked");
     {
         let running = state.running.lock().unwrap();
         if *running {
-            if let Some(url) = state.url.lock().unwrap().clone() {
-                return Ok(url);
+            if let Some(urls) = state.urls.lock().unwrap().clone() {
+                return Ok(urls);
             }
         }
     }
 
     let ip = local_ip_address::local_ip().map_err(|e| e.to_string())?;
     let server = Server::http(format!("0.0.0.0:{}", WEB_PORT)).map_err(|e| e.to_string())?;
-    let url = format!("http://{}:{}", ip, WEB_PORT);
-    log::info!("web server bound at {url}");
+    let ip_url = format!("http://{}:{}", ip, WEB_PORT);
+    log::info!("web server bound at {ip_url}");
 
-    *state.url.lock().unwrap() = Some(url.clone());
+    // Advertise envialo.local via mDNS so phones can use a friendly URL instead of the IP.
+    let friendly_url = format!("http://envialo.local:{}", WEB_PORT);
+    match ServiceDaemon::new().and_then(|mdns| {
+        let props: [(&str, &str); 0] = [];
+        let info = ServiceInfo::new(
+            "_envialo-web._tcp.local.",
+            "envialo-web",
+            FRIENDLY_HOST,
+            &ip.to_string(),
+            WEB_PORT,
+            &props[..],
+        )?;
+        mdns.register(info)?;
+        Ok(mdns)
+    }) {
+        Ok(mdns) => *state._mdns.lock().unwrap() = Some(mdns),
+        Err(e) => log::error!("could not advertise envialo.local: {e}"),
+    }
+
+    let urls = WebServerUrls {
+        url: friendly_url,
+        ip_url,
+    };
+    *state.urls.lock().unwrap() = Some(urls.clone());
     *state.running.lock().unwrap() = true;
 
     std::thread::spawn(move || {
@@ -585,5 +620,5 @@ pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<
         }
     });
 
-    Ok(url)
+    Ok(urls)
 }

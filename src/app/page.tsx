@@ -948,7 +948,11 @@ export default function Home() {
                   />
                   <SettingsRow
                     label="Acceso desde celular"
-                    description={webServerUrl ? `Abre ${webServerUrl} en el navegador de tu celular, misma red` : "Solo disponible en la app de escritorio"}
+                    description={
+                      webServerUrl
+                        ? `Abre ${webServerUrl.url} en el navegador de tu celular (misma red). Si no carga, probá ${webServerUrl.ipUrl}`
+                        : "Solo disponible en la app de escritorio"
+                    }
                     control={<Badge label={webServerUrl ? "Activo" : "Detenido"} variant={webServerUrl ? "success" : "neutral"} />}
                   />
                 </div>

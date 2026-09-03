@@ -46,7 +46,7 @@ pub fn run() {
 
       let web_handle = app.handle().clone();
       match webserver::start_web_server(web_handle.clone(), web_handle.state::<webserver::WebServerState>()) {
-        Ok(url) => log::info!("mobile web server listening at {url}"),
+        Ok(urls) => log::info!("mobile web server listening at {} (fallback {})", urls.url, urls.ip_url),
         Err(e) => log::error!("mobile web server failed to start: {e}"),
       }
 
