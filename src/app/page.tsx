@@ -49,7 +49,7 @@ import { TransferStatusBadge } from "@/components/ui/transfer-status-badge";
 import { TransferProgressBar } from "@/components/ui/transfer-progress-bar";
 import { Device, SelectedItem, SentItem, TransferStatus } from "@/types";
 import { cn, formatBytes } from "@/lib/utils";
-import { isTauri } from "@/lib/platform";
+import { isTauri, useIsTauri } from "@/lib/platform";
 import { useTheme } from "@/lib/theme";
 import { useConnectionType } from "@/lib/network";
 import { useDiscoveredDevices } from "@/lib/discovery";
@@ -127,6 +127,7 @@ export default function Home() {
     respondTransfer,
   } = useTransferEvents();
   const webServerUrl = useWebServer();
+  const isTauriApp = useIsTauri();
   const {
     status: updateStatus,
     currentVersion,
@@ -622,7 +623,7 @@ export default function Home() {
                 <div className="flex items-center justify-between mb-4">
                   <BentoPanelHeader
                     title="Dispositivos en tu red local"
-                    subtitle={isTauri() ? "Detección automática vía mDNS en tu red local" : "Detección automática vía mDNS (solo en la app de escritorio)"}
+                    subtitle={isTauriApp ? "Detección automática vía mDNS en tu red local" : "Detección automática vía mDNS (solo en la app de escritorio)"}
                     icon={<Laptop2 className="w-5 h-5" />}
                   />
                   <button
@@ -650,7 +651,7 @@ export default function Home() {
                     icon={<Laptop2 className="w-14 h-14 animate-float-soft" />}
                     title="Ningún dispositivo detectado todavía"
                     description={
-                      isTauri()
+                      isTauriApp
                         ? "Buscando otros equipos con Envialo abierto en tu misma red (wifi o cable)."
                         : "La búsqueda automática solo funciona dentro de la app de escritorio (Tauri)."
                     }
@@ -993,8 +994,8 @@ export default function Home() {
                   </div>
                   <SettingsRow
                     label="Servidor local"
-                    description={isTauri() ? "mDNS + transferencia — activo" : "Solo disponible en la app de escritorio"}
-                    control={<Badge label={isTauri() ? "Activo" : "Detenido"} variant={isTauri() ? "success" : "neutral"} />}
+                    description={isTauriApp ? "mDNS + transferencia — activo" : "Solo disponible en la app de escritorio"}
+                    control={<Badge label={isTauriApp ? "Activo" : "Detenido"} variant={isTauriApp ? "success" : "neutral"} />}
                   />
                   <SettingsRow
                     label="Acceso desde celular"

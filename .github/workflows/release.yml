@@ -47,6 +47,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Envialo ${{ github.ref_name }}"
           releaseBody: "Ver los cambios de esta versión más abajo."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
