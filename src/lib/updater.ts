@@ -4,7 +4,7 @@ import { isTauri } from "@/lib/platform";
 
 const FALLBACK_VERSION = "0.1.0";
 
-export type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "downloading" | "installing" | "error";
+export type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "downloading" | "ready" | "error";
 
 interface DownloadEvent {
   event: "Started" | "Progress" | "Finished";
@@ -69,17 +69,19 @@ export function useUpdater() {
         } else if (event.event === "Progress") {
           downloaded += event.data.chunkLength ?? 0;
           setProgress(contentLength > 0 ? Math.round((downloaded / contentLength) * 100) : 0);
-        } else if (event.event === "Finished") {
-          setStatus("installing");
         }
       });
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
+      setStatus("ready");
     } catch (e) {
       setStatus("error");
       setError(e instanceof Error ? e.message : String(e));
     }
   }
 
-  return { status, currentVersion, latestVersion, progress, error, checkForUpdate, installUpdate };
+  async function restartToApply() {
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+  }
+
+  return { status, currentVersion, latestVersion, progress, error, checkForUpdate, installUpdate, restartToApply };
 }

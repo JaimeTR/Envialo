@@ -24,6 +24,7 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
+  Download,
 } from "lucide-react";
 import { Sidebar, TabId } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
@@ -134,6 +135,7 @@ export default function Home() {
     error: updateError,
     checkForUpdate,
     installUpdate,
+    restartToApply,
   } = useUpdater();
   const devices = sortDevices(rawDevices).map((d) => ({ ...d, paired: pairedIds.has(d.id) }));
   const onlineCount = devices.filter((d) => d.status === "online").length;
@@ -969,33 +971,6 @@ export default function Home() {
                     description="La ventana se oculta a la bandeja en vez de cerrar la app"
                     control={<RowToggle checked={minimizeOnClose} onChange={setMinimizeOnClose} />}
                   />
-                  <SettingsRow
-                    label="Versión"
-                    description={
-                      updateStatus === "error"
-                        ? updateError || "No se pudo buscar actualizaciones"
-                        : updateStatus === "available"
-                        ? `v${currentVersion} instalada — nueva versión v${latestVersion} disponible`
-                        : updateStatus === "installing"
-                        ? "Instalando — la app se reiniciará sola"
-                        : `v${currentVersion} instalada`
-                    }
-                    control={
-                      updateStatus === "checking" ? (
-                        <Badge label="Buscando…" variant="info" />
-                      ) : updateStatus === "up-to-date" ? (
-                        <Badge label="Actualizado" variant="success" />
-                      ) : updateStatus === "available" ? (
-                        <StyledButton label="Instalar" size="sm" onClick={installUpdate} />
-                      ) : updateStatus === "downloading" ? (
-                        <Badge label={`Descargando ${updateProgress}%`} variant="info" />
-                      ) : updateStatus === "installing" ? (
-                        <Badge label="Instalando…" variant="info" />
-                      ) : (
-                        <StyledButton label="Buscar actualizaciones" variant="outline" size="sm" onClick={checkForUpdate} />
-                      )
-                    }
-                  />
                 </div>
               </BentoPanel>
 
@@ -1025,6 +1000,39 @@ export default function Home() {
                     label="Acceso desde celular"
                     description={webServerUrl ? `Abre ${webServerUrl} en el navegador de tu celular, misma red` : "Solo disponible en la app de escritorio"}
                     control={<Badge label={webServerUrl ? "Activo" : "Detenido"} variant={webServerUrl ? "success" : "neutral"} />}
+                  />
+                </div>
+              </BentoPanel>
+
+              <BentoPanel>
+                <BentoPanelHeader title="Actualizaciones" subtitle="Versión instalada y nuevas versiones disponibles" icon={<Download className="w-5 h-5" />} />
+                <div className="space-y-3">
+                  <SettingsRow
+                    label="Versión"
+                    description={
+                      updateStatus === "error"
+                        ? updateError || "No se pudo buscar actualizaciones"
+                        : updateStatus === "available"
+                        ? `v${currentVersion} instalada — nueva versión v${latestVersion} disponible`
+                        : updateStatus === "ready"
+                        ? "Descargada — reinicia para instalarla"
+                        : `v${currentVersion} instalada`
+                    }
+                    control={
+                      updateStatus === "checking" ? (
+                        <Badge label="Buscando…" variant="info" />
+                      ) : updateStatus === "up-to-date" ? (
+                        <Badge label="Actualizado" variant="success" />
+                      ) : updateStatus === "available" ? (
+                        <StyledButton label={`Instalar v${latestVersion}`} size="sm" onClick={installUpdate} />
+                      ) : updateStatus === "downloading" ? (
+                        <Badge label={`Descargando ${updateProgress}%`} variant="info" />
+                      ) : updateStatus === "ready" ? (
+                        <StyledButton label="Reiniciar e instalar" size="sm" icon={<RotateCw className="w-3.5 h-3.5" />} onClick={restartToApply} />
+                      ) : (
+                        <StyledButton label="Buscar actualizaciones" variant="outline" size="sm" onClick={checkForUpdate} />
+                      )
+                    }
                   />
                 </div>
               </BentoPanel>
