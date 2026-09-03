@@ -149,6 +149,15 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!isTauri()) return;
+    (async () => {
+      const { documentDir, join } = await import("@tauri-apps/api/path");
+      const docs = await documentDir();
+      setDownloadPath(await join(docs, "Envialo"));
+    })();
+  }, []);
+
+  useEffect(() => {
     if (!pairResult) return;
     setPairingTargetId(null);
     if (pairResult.timedOut) {
