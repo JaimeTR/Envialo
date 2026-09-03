@@ -511,7 +511,6 @@ pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<
 
                     let device_id = format!("phone-{session}");
                     let discovery = app.state::<DiscoveryState>();
-                    let is_new = !discovery.known_devices.lock().unwrap().contains_key(&device_id);
                     discovery.known_devices.lock().unwrap().insert(
                         device_id.clone(),
                         KnownDevice {
@@ -522,12 +521,14 @@ pub fn start_web_server(app: AppHandle, state: State<WebServerState>) -> Result<
                             status: "online".to_string(),
                         },
                     );
-                    if is_new {
-                        let _ = app.emit(
-                            "device-found",
-                            serde_json::json!({ "id": device_id, "name": "Celular", "owner": alias, "connectionType": "phone", "status": "online" }),
-                        );
-                    }
+                    // Emit on every heartbeat, not just first registration — otherwise a
+                    // desktop app restarted *after* the phone already registered would
+                    // never learn about it (it only listens for fresh events, doesn't
+                    // poll known_devices).
+                    let _ = app.emit(
+                        "device-found",
+                        serde_json::json!({ "id": device_id, "name": "Celular", "owner": alias, "connectionType": "phone", "status": "online" }),
+                    );
                 }
                 let _ = request.respond(Response::from_string("{\"ok\":true}").with_header(json_header()));
                 continue;
