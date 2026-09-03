@@ -50,3 +50,30 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  organize-assets:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Group downloads by platform in the release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          assets=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+
+          windows=$(echo "$assets" | grep -E '\.(exe|msi)$' | awk -v base="$base_url" '{print "- ["$0"]("base"/"$0")"}')
+          mac=$(echo "$assets" | grep -E '\.(dmg|app\.tar\.gz)$' | awk -v base="$base_url" '{print "- ["$0"]("base"/"$0")"}')
+
+          {
+            echo "## Windows"
+            echo "$windows"
+            echo ""
+            echo "## macOS"
+            echo "$mac"
+          } > notes.md
+
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
