@@ -624,7 +624,7 @@ export default function Home() {
                             {device.area ? ` · ${device.area}` : ""}
                           </p>
                         </div>
-                        {pairedIds.has(device.id) ? (
+                        {device.connectionType === "phone" ? null : pairedIds.has(device.id) ? (
                           <Badge label="Emparejado" variant="info" />
                         ) : (
                           device.status === "online" && (
