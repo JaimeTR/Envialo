@@ -33,4 +33,5 @@ export interface SentItem extends SelectedItem {
   direction: TransferDirection;
   savedPath?: string;
   transferId?: string;
+  mergedItems?: SelectedItem[];
 }

@@ -161,6 +161,12 @@ export default function Home() {
   }, [pairResult]);
 
   useEffect(() => {
+    if (updateStatus === "ready") {
+      setToastMsg(`Actualización v${latestVersion} lista — reinicia cuando quieras desde Configuración`);
+    }
+  }, [updateStatus, latestVersion]);
+
+  useEffect(() => {
     setSentItems((prev) =>
       prev.map((it) => (it.transferId && sendProgress[it.transferId] !== undefined ? { ...it, progress: sendProgress[it.transferId] } : it))
     );
@@ -207,12 +213,7 @@ export default function Home() {
 
   function buildReceivedRows(transferId: string, fromAlias: string, itemsSummary: { name: string; isDirectory: boolean; size: number }[]) {
     const now = new Date();
-    return itemsSummary.map((it, idx) => ({
-      path: `${transferId}-${idx}`,
-      name: it.name,
-      isDirectory: it.isDirectory,
-      size: it.size,
-      id: `${transferId}-${idx}`,
+    const base = {
       deviceName: fromAlias,
       status: "transferring" as const,
       progress: 0,
@@ -220,6 +221,28 @@ export default function Home() {
       createdAt: now.getTime(),
       direction: "received" as const,
       transferId,
+    };
+    // Varios elementos comparten una sola conexión y un progreso agregado — una fila
+    // por elemento mostraría el mismo % en todas aunque terminen en momentos distintos.
+    if (itemsSummary.length > 1) {
+      return [
+        {
+          ...base,
+          path: `${transferId}-batch`,
+          id: `${transferId}-batch`,
+          name: `${itemsSummary.length} elementos`,
+          isDirectory: false,
+          size: itemsSummary.reduce((sum, it) => sum + it.size, 0),
+        },
+      ];
+    }
+    return itemsSummary.map((it, idx) => ({
+      ...base,
+      path: `${transferId}-${idx}`,
+      name: it.name,
+      isDirectory: it.isDirectory,
+      size: it.size,
+      id: `${transferId}-${idx}`,
     }));
   }
 
@@ -346,9 +369,7 @@ export default function Home() {
     if (isTauri()) {
       try {
         const transferId = await sendTransfer(device.id, alias, capturedItems);
-        const newItems = capturedItems.map((item) => ({
-          ...item,
-          id: `${transferId}-${item.path}`,
+        const base = {
           deviceName: device.owner,
           status: "transferring" as const,
           progress: 0,
@@ -356,7 +377,26 @@ export default function Home() {
           createdAt: now.getTime(),
           direction: "sent" as const,
           transferId,
-        }));
+        };
+        // Varios elementos comparten una sola conexión y un progreso agregado — una fila
+        // por elemento mostraría el mismo % en todas aunque terminen en momentos distintos.
+        const newItems: SentItem[] =
+          capturedItems.length > 1
+            ? [
+                {
+                  ...base,
+                  path: `${transferId}-batch`,
+                  id: `${transferId}-batch`,
+                  name: `${capturedItems.length} elementos`,
+                  isDirectory: false,
+                  mergedItems: capturedItems,
+                },
+              ]
+            : capturedItems.map((item) => ({
+                ...item,
+                ...base,
+                id: `${transferId}-${item.path}`,
+              }));
         setSentItems((prev) => [...newItems, ...prev]);
         setToastMsg(`Enviando a ${device.owner}...`);
       } catch {
@@ -408,7 +448,8 @@ export default function Home() {
   async function handleConfirmSendRetry(device: Device, item: SentItem) {
     setSentItems((prev) => prev.filter((it) => it.id !== item.id));
     try {
-      const transferId = await sendTransfer(device.id, alias, [item]);
+      const itemsToSend = item.mergedItems ?? [item];
+      const transferId = await sendTransfer(device.id, alias, itemsToSend);
       const now = new Date();
       const newItem: SentItem = {
         ...item,

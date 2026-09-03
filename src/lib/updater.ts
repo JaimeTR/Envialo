@@ -32,6 +32,28 @@ export function useUpdater() {
     })();
   }, []);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    const timer = setTimeout(async () => {
+      try {
+        const { check } = await import("@tauri-apps/plugin-updater");
+        const update = await check();
+        if (!update) {
+          setStatus("up-to-date");
+          return;
+        }
+        pendingUpdate.current = update as unknown as UpdateHandle;
+        setLatestVersion(update.version);
+        setStatus("available");
+        await installUpdate();
+      } catch {
+        // silent — background check, the user can still retry manually from Configuración
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function checkForUpdate() {
     if (!isTauri()) {
       setStatus("error");
