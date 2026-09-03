@@ -176,9 +176,14 @@ export default function Home() {
     if (!sendResult) return;
     const status = sendResult.status === "accepted" ? "accepted" : sendResult.status === "rejected" ? "rejected" : "failed";
     setSentItems((prev) => prev.map((it) => (it.transferId === sendResult.transferId ? { ...it, status, progress: 100 } : it)));
-    if (sendResult.status === "accepted") setToastMsg("Enviado y recibido correctamente");
-    else if (sendResult.status === "rejected") setToastMsg("El destinatario rechazó el envío");
-    else setToastMsg(`Error al enviar: ${sendResult.error || "desconocido"}`);
+    const isPhoneTarget = sendResult.targetId.startsWith("phone-");
+    if (sendResult.status === "accepted") {
+      setToastMsg(isPhoneTarget ? "Disponible en el celular — esperando que lo descargue" : "Enviado y recibido correctamente");
+    } else if (sendResult.status === "rejected") {
+      setToastMsg("El destinatario rechazó el envío");
+    } else {
+      setToastMsg(`Error al enviar: ${sendResult.error || "desconocido"}`);
+    }
   }, [sendResult]);
 
   useEffect(() => {
