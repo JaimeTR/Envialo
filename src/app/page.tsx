@@ -975,7 +975,7 @@ export default function Home() {
                   {webServerUrl && (
                     <div className="flex items-center gap-4 p-3.5 rounded-xl border border-slate-200 bg-white dark:border-[#222738] dark:bg-[#1c2130]/60">
                       <div
-                        className="shrink-0 w-24 h-24 bg-white rounded-lg p-1.5 border border-slate-200"
+                        className="shrink-0 w-24 h-24 bg-white rounded-lg p-1.5 border border-slate-200 overflow-hidden [&>svg]:w-full [&>svg]:h-full [&>svg]:block"
                         dangerouslySetInnerHTML={{ __html: webServerUrl.qrSvg }}
                       />
                       <div className="min-w-0">
