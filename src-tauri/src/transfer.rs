@@ -1,9 +1,10 @@
 use crate::discovery::{get_or_create_device_id, DiscoveryState};
 use crate::server::WireMessage;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -12,6 +13,47 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 const CHUNK_SIZE: usize = 64 * 1024;
+const PART_SUFFIX: &str = ".part";
+
+fn hash_file(path: &Path) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn part_path_for(dest_path: &Path) -> PathBuf {
+    let mut part = dest_path.as_os_str().to_owned();
+    part.push(PART_SUFFIX);
+    PathBuf::from(part)
+}
+
+/// If `path` already exists, finds a free "name (1).ext", "name (2).ext"... sibling.
+fn unique_dest_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("archivo");
+    let ext = path.extension().and_then(|s| s.to_str());
+    for n in 1u32.. {
+        let candidate_name = match ext {
+            Some(ext) => format!("{stem} ({n}).{ext}"),
+            None => format!("{stem} ({n})"),
+        };
+        let candidate = parent.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WireFileEntry {
@@ -29,14 +71,21 @@ pub struct WireItemSummary {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ControlMessage {
-    Accept,
+    /// `resume_offsets` has one entry per file in the original offer (same order),
+    /// telling the sender how many bytes of that file the receiver already has on
+    /// disk from a previous, interrupted attempt — 0 for a fresh transfer.
+    Accept { resume_offsets: Vec<u64> },
     Reject,
 }
 
 #[derive(Serialize, Deserialize)]
 struct FileStartHeader {
     path: String,
+    /// Bytes that follow this header (may be less than `total_size` when resuming).
     size: u64,
+    total_size: u64,
+    resume_offset: u64,
+    sha256: String,
 }
 
 #[derive(Deserialize, Clone)]
@@ -252,29 +301,46 @@ pub fn send_transfer(
             let control: ControlMessage =
                 serde_json::from_str(resp_line.trim()).map_err(|e| e.to_string())?;
 
-            if matches!(control, ControlMessage::Reject) {
-                return Err("__rejected__".to_string());
-            }
+            let resume_offsets = match control {
+                ControlMessage::Reject => return Err("__rejected__".to_string()),
+                ControlMessage::Accept { resume_offsets } => resume_offsets,
+            };
 
             stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
 
-            let mut sent_total: u64 = 0;
-            for file in &flattened {
+            let mut sent_total: u64 = resume_offsets.iter().sum();
+            for (idx, file) in flattened.iter().enumerate() {
+                let offset = resume_offsets.get(idx).copied().unwrap_or(0).min(file.size);
+
+                let (sha256, mut disk_file) = match &file.source {
+                    FileSource::Disk(path) => {
+                        let hash = hash_file(path).map_err(|e| e.to_string())?;
+                        let mut f = fs::File::open(path).map_err(|e| e.to_string())?;
+                        if offset > 0 {
+                            f.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+                        }
+                        (hash, Some(f))
+                    }
+                    FileSource::Text(bytes) => (hash_bytes(bytes), None),
+                };
+
                 let header = FileStartHeader {
                     path: file.relative_path.clone(),
-                    size: file.size,
+                    size: file.size - offset,
+                    total_size: file.size,
+                    resume_offset: offset,
+                    sha256,
                 };
                 let header_line = serde_json::to_string(&header).map_err(|e| e.to_string())?;
                 stream.write_all(header_line.as_bytes()).map_err(|e| e.to_string())?;
                 stream.write_all(b"\n").map_err(|e| e.to_string())?;
 
                 let base_sent = sent_total;
-                match &file.source {
-                    FileSource::Disk(path) => {
-                        let f = fs::File::open(path).map_err(|e| e.to_string())?;
+                match (&file.source, disk_file.take()) {
+                    (FileSource::Disk(_), Some(f)) => {
                         let transfer_id = transfer_id_for_thread.clone();
                         let app = &app;
-                        copy_with_progress(f, &mut stream, file.size, |n| {
+                        copy_with_progress(f, &mut stream, header.size, |n| {
                             let _ = app.emit(
                                 "send-progress",
                                 serde_json::json!({
@@ -286,7 +352,7 @@ pub fn send_transfer(
                         })
                         .map_err(|e| e.to_string())?;
                     }
-                    FileSource::Text(bytes) => {
+                    (FileSource::Text(bytes), _) => {
                         stream.write_all(bytes).map_err(|e| e.to_string())?;
                         let _ = app.emit(
                             "send-progress",
@@ -297,8 +363,9 @@ pub fn send_transfer(
                             }),
                         );
                     }
+                    _ => unreachable!(),
                 }
-                sent_total += file.size;
+                sent_total += header.size;
             }
 
             Ok(())
@@ -391,8 +458,21 @@ pub fn respond_transfer(
         .remove(&transfer_id)
         .ok_or_else(|| "Transferencia no encontrada".to_string())?;
 
+    let dest_root = PathBuf::from(&download_path);
+
     let control = if accept {
-        ControlMessage::Accept
+        // A `.part` left over from a previous attempt at the exact same file
+        // (same relative path, same expected size) means we can resume instead
+        // of re-downloading it from zero.
+        let resume_offsets: Vec<u64> = pending
+            .files
+            .iter()
+            .map(|f| {
+                let part_path = part_path_for(&dest_root.join(&f.relative_path));
+                fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0).min(f.size)
+            })
+            .collect();
+        ControlMessage::Accept { resume_offsets }
     } else {
         ControlMessage::Reject
     };
@@ -404,7 +484,6 @@ pub fn respond_transfer(
         return Ok(());
     }
 
-    let dest_root = PathBuf::from(&download_path);
     let files = pending.files.clone();
     let items = pending.items.clone();
     let from_id = pending.from_id.clone();
@@ -414,8 +493,8 @@ pub fn respond_transfer(
     std::thread::spawn(move || {
         let mut reader = pending.reader;
         let result: Result<(), String> = (|| {
-            let mut received_total: u64 = 0;
             let total_size: u64 = files.iter().map(|f| f.size).sum();
+            let mut received_total: u64 = 0;
 
             for _expected in &files {
                 let mut header_line = String::new();
@@ -427,7 +506,17 @@ pub fn respond_transfer(
                 if let Some(parent) = dest_path.parent() {
                     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
-                let mut out_file = fs::File::create(&dest_path).map_err(|e| e.to_string())?;
+                let part_path = part_path_for(&dest_path);
+                received_total += header.resume_offset;
+
+                let mut out_file = if header.resume_offset > 0 {
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&part_path)
+                        .map_err(|e| e.to_string())?
+                } else {
+                    fs::File::create(&part_path).map_err(|e| e.to_string())?
+                };
 
                 let mut remaining = header.size;
                 let mut buf = [0u8; CHUNK_SIZE];
@@ -436,6 +525,9 @@ pub fn respond_transfer(
                     let to_read = remaining.min(CHUNK_SIZE as u64) as usize;
                     let n = reader.read(&mut buf[..to_read]).map_err(|e| e.to_string())?;
                     if n == 0 {
+                        // Connection dropped mid-file — leave the .part file as-is so a
+                        // retry of this exact transfer can resume from here instead of
+                        // starting over.
                         return Err("conexión cerrada antes de tiempo".to_string());
                     }
                     out_file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
@@ -453,6 +545,16 @@ pub fn respond_transfer(
                         last_emit = Instant::now();
                     }
                 }
+                drop(out_file);
+
+                let actual_hash = hash_file(&part_path).map_err(|e| e.to_string())?;
+                if actual_hash != header.sha256 {
+                    let _ = fs::remove_file(&part_path);
+                    return Err(format!("verificación de integridad falló para {}", header.path));
+                }
+
+                let final_path = unique_dest_path(&dest_path);
+                fs::rename(&part_path, &final_path).map_err(|e| e.to_string())?;
             }
             Ok(())
         })();

@@ -56,7 +56,7 @@ import { usePairing } from "@/lib/pairing";
 import { useTransferEvents } from "@/lib/transfer";
 import { useWebServer } from "@/lib/webserver";
 import { useUpdater } from "@/lib/updater";
-import { usePersistedState, hasStoredValue } from "@/lib/settings";
+import { usePersistedState, useGatedPersistedState, hasStoredValue } from "@/lib/settings";
 import { useAutostart } from "@/lib/autostart";
 import { useIncomingTransferNotifier } from "@/lib/notifications";
 
@@ -89,8 +89,9 @@ function sortDevices(list: Device[]): Device[] {
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("devices");
   const [items, setItems] = useState<SelectedItem[]>([]);
-  const [sentItems, setSentItems] = useState<SentItem[]>([]);
-  const [receivedItems, setReceivedItems] = useState<SentItem[]>([]);
+  const [saveHistory, setSaveHistory] = usePersistedState("save-history", true);
+  const [sentItems, setSentItems] = useGatedPersistedState<SentItem[]>("sent-history", [], saveHistory);
+  const [receivedItems, setReceivedItems] = useGatedPersistedState<SentItem[]>("received-history", [], saveHistory);
   const [sentPage, setSentPage] = useState(0);
   const [historyPage, setHistoryPage] = useState(0);
   const [showSendModal, setShowSendModal] = useState(false);
@@ -105,7 +106,6 @@ export default function Home() {
   const [minimizeOnClose, setMinimizeOnClose] = usePersistedState("minimize-on-close", true);
   const [quickSave, setQuickSave] = usePersistedState<"off" | "favorites" | "on">("quick-save", "off");
   const [myVisibility, setMyVisibility] = usePersistedState<"online" | "hidden">("visibility", "online");
-  const [saveHistory, setSaveHistory] = usePersistedState("save-history", true);
   const { enabled: autoStart, setEnabled: setAutoStart } = useAutostart();
 
   useEffect(() => {

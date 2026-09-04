@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useEffect, useState } from "react";
 
 const PREFIX = "envialo-setting-";
 
@@ -14,7 +14,7 @@ function readStored<T>(key: string, initial: T): T {
 
 /** localStorage-backed state — survives app restarts and updates (WebView2/WKWebView
  * storage is keyed by the app identifier, not the installed version). */
-export function usePersistedState<T>(key: string, initial: T): [T, (value: T) => void] {
+export function usePersistedState<T>(key: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
   const [value, setValue] = useState<T>(() => readStored(key, initial));
 
   useEffect(() => {
@@ -25,6 +25,25 @@ export function usePersistedState<T>(key: string, initial: T): [T, (value: T) =>
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
+
+  return [value, setValue];
+}
+
+/** Same as usePersistedState, but only writes to storage while `enabled` is true
+ * — used for the transfer history, which respects the "Guardar en historial" toggle.
+ * Turning it off just stops recording new entries; it never deletes what's stored. */
+export function useGatedPersistedState<T>(key: string, initial: T, enabled: boolean): [T, Dispatch<SetStateAction<T>>] {
+  const [value, setValue] = useState<T>(() => readStored(key, initial));
+
+  useEffect(() => {
+    if (!enabled) return;
+    try {
+      localStorage.setItem(PREFIX + key, JSON.stringify(value));
+    } catch {
+      // localStorage unavailable — history just won't survive a restart.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, enabled]);
 
   return [value, setValue];
 }

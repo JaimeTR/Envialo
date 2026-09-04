@@ -17,11 +17,20 @@ pub struct KnownDevice {
     pub status: String,
 }
 
+#[derive(Clone)]
+struct SelfPresence {
+    alias: String,
+    connection_type: String,
+    visible: bool,
+}
+
 #[derive(Default)]
 pub struct DiscoveryState {
     daemon: Mutex<Option<ServiceDaemon>>,
     self_fullname: Mutex<Option<String>>,
     browsing: Mutex<bool>,
+    self_heal_started: Mutex<bool>,
+    self_presence: Mutex<Option<SelfPresence>>,
     pub peer_addresses: Mutex<HashMap<String, (String, u16)>>,
     pub known_devices: Mutex<HashMap<String, KnownDevice>>,
 }
@@ -45,6 +54,29 @@ pub fn get_or_create_device_id(app: &AppHandle) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     std::fs::write(&file, &id).map_err(|e| e.to_string())?;
     Ok(id)
+}
+
+/// Local-only bookkeeping so the mobile page (served by this same PC) can offer
+/// "send to this computer" as a target — the mDNS browse loop only ever lists
+/// *other* peers, since a device doesn't discover itself. Idempotent — safe to
+/// call repeatedly (used both on registration and by the self-heal loop below).
+fn relist_self(app: &AppHandle, device_id: &str, ip: &str, alias: &str, connection_type: &str) {
+    let discovery_state = app.state::<DiscoveryState>();
+    discovery_state
+        .peer_addresses
+        .lock()
+        .unwrap()
+        .insert(device_id.to_string(), (ip.to_string(), SERVICE_PORT));
+    discovery_state.known_devices.lock().unwrap().insert(
+        device_id.to_string(),
+        KnownDevice {
+            id: device_id.to_string(),
+            name: local_hostname(),
+            owner: alias.to_string(),
+            connection_type: connection_type.to_string(),
+            status: "online".to_string(),
+        },
+    );
 }
 
 fn register_self(
@@ -78,25 +110,7 @@ fn register_self(
     let fullname = service_info.get_fullname().to_string();
     mdns.register(service_info).map_err(|e| e.to_string())?;
 
-    // List ourselves too, so the mobile page (served by this same PC) can offer
-    // "send to this computer" as a target — the mDNS browse loop only ever lists
-    // *other* peers, since a device doesn't discover itself.
-    let discovery_state = app.state::<DiscoveryState>();
-    discovery_state
-        .peer_addresses
-        .lock()
-        .unwrap()
-        .insert(device_id.clone(), (ip.to_string(), SERVICE_PORT));
-    discovery_state.known_devices.lock().unwrap().insert(
-        device_id.clone(),
-        KnownDevice {
-            id: device_id.clone(),
-            name: hostname_display,
-            owner: alias.to_string(),
-            connection_type: connection_type.to_string(),
-            status: "online".to_string(),
-        },
-    );
+    relist_self(app, &device_id, &ip.to_string(), alias, connection_type);
 
     Ok(fullname)
 }
@@ -107,6 +121,41 @@ fn unlist_self(app: &AppHandle) {
         discovery_state.peer_addresses.lock().unwrap().remove(&device_id);
         discovery_state.known_devices.lock().unwrap().remove(&device_id);
     }
+}
+
+/// Re-affirms our own listing every few seconds so a transient failure (mDNS
+/// hiccup, network not ready yet at boot via autostart, etc.) self-heals
+/// instead of leaving this PC permanently missing as a send target. If the
+/// initial mDNS advertisement never actually succeeded, retries it in full —
+/// otherwise just refreshes the cheap local bookkeeping.
+fn spawn_self_heal_thread(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        let discovery_state = app.state::<DiscoveryState>();
+        let presence = discovery_state.self_presence.lock().unwrap().clone();
+        let Some(presence) = presence else { continue };
+        if !presence.visible {
+            continue;
+        }
+
+        let already_advertised = discovery_state.self_fullname.lock().unwrap().is_some();
+        if already_advertised {
+            let Ok(device_id) = get_or_create_device_id(&app) else { continue };
+            let Ok(ip) = local_ip_address::local_ip() else { continue };
+            relist_self(&app, &device_id, &ip.to_string(), &presence.alias, &presence.connection_type);
+            continue;
+        }
+
+        let mdns = discovery_state.daemon.lock().unwrap().clone();
+        let Some(mdns) = mdns else { continue };
+        match register_self(&app, &mdns, &presence.alias, &presence.connection_type) {
+            Ok(fullname) => {
+                log::info!("self-heal: mDNS advertisement recovered");
+                *discovery_state.self_fullname.lock().unwrap() = Some(fullname);
+            }
+            Err(e) => log::error!("self-heal: register_self still failing: {e}"),
+        }
+    });
 }
 
 fn spawn_browse_thread(app: AppHandle, mdns: ServiceDaemon) {
@@ -213,9 +262,29 @@ pub fn start_discovery(
     }
     drop(browsing_guard);
 
+    *state.self_presence.lock().unwrap() = Some(SelfPresence {
+        alias: alias.clone(),
+        connection_type: connection_type.clone(),
+        visible,
+    });
+    let mut heal_guard = state.self_heal_started.lock().unwrap();
+    if !*heal_guard {
+        *heal_guard = true;
+        spawn_self_heal_thread(app.clone());
+    }
+    drop(heal_guard);
+
+    log::info!("start_discovery invoked: alias={alias} visible={visible}");
     if visible {
-        let fullname = register_self(&app, &mdns, &alias, &connection_type)?;
-        *state.self_fullname.lock().unwrap() = Some(fullname);
+        match register_self(&app, &mdns, &alias, &connection_type) {
+            Ok(fullname) => *state.self_fullname.lock().unwrap() = Some(fullname),
+            Err(e) => {
+                // Don't fail the whole command — the self-heal loop above will
+                // keep retrying every 10s (e.g. autostart launching before the
+                // network adapter is ready), so discovery still ends up working.
+                log::error!("register_self failed, will retry in background: {e}");
+            }
+        }
     } else {
         unlist_self(&app);
     }
@@ -237,6 +306,12 @@ pub fn set_presence(
         None => return Err("discovery not started".to_string()),
     };
     drop(daemon_guard);
+
+    *state.self_presence.lock().unwrap() = Some(SelfPresence {
+        alias: alias.clone(),
+        connection_type: connection_type.clone(),
+        visible,
+    });
 
     let mut fullname_guard = state.self_fullname.lock().unwrap();
     if let Some(prev) = fullname_guard.take() {

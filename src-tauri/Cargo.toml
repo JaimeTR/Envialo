@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.6"
+version = "0.1.7"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -38,3 +38,4 @@ urlencoding = "2"
 qrcode = "0.14"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-notification = "2.4.0"
+sha2 = "0.10.9"
