@@ -56,6 +56,9 @@ import { usePairing } from "@/lib/pairing";
 import { useTransferEvents } from "@/lib/transfer";
 import { useWebServer } from "@/lib/webserver";
 import { useUpdater } from "@/lib/updater";
+import { usePersistedState, hasStoredValue } from "@/lib/settings";
+import { useAutostart } from "@/lib/autostart";
+import { useIncomingTransferNotifier } from "@/lib/notifications";
 
 const TAB_TITLES: Record<TabId, string> = {
   devices: "Dispositivos en tu red",
@@ -94,16 +97,21 @@ export default function Home() {
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [showTextModal, setShowTextModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [downloadPath, setDownloadPath] = useState("Documentos/Envialo");
-  const [alias, setAlias] = useState("Jaime Tarazona");
+  const [downloadPath, setDownloadPath] = usePersistedState("download-path", "Documentos/Envialo");
+  const [alias, setAlias] = usePersistedState("alias", "Jaime Tarazona");
   const { mode: themeMode, setMode: setThemeMode } = useTheme();
   const connectionType = useConnectionType();
   const ConnectionIcon = connectionType === "wifi" ? Wifi : Laptop2;
-  const [autoStart, setAutoStart] = useState(true);
-  const [minimizeOnClose, setMinimizeOnClose] = useState(true);
-  const [quickSave, setQuickSave] = useState<"off" | "favorites" | "on">("off");
-  const [myVisibility, setMyVisibility] = useState<"online" | "hidden">("online");
-  const [saveHistory, setSaveHistory] = useState(true);
+  const [minimizeOnClose, setMinimizeOnClose] = usePersistedState("minimize-on-close", true);
+  const [quickSave, setQuickSave] = usePersistedState<"off" | "favorites" | "on">("quick-save", "off");
+  const [myVisibility, setMyVisibility] = usePersistedState<"online" | "hidden">("visibility", "online");
+  const [saveHistory, setSaveHistory] = usePersistedState("save-history", true);
+  const { enabled: autoStart, setEnabled: setAutoStart } = useAutostart();
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    import("@tauri-apps/api/core").then(({ invoke }) => invoke("set_minimize_on_close", { enabled: minimizeOnClose }).catch(() => {}));
+  }, [minimizeOnClose]);
   const rawDevices = useDiscoveredDevices(alias, connectionType, myVisibility === "online");
   const { pairedIds, incomingRequest: incomingPairRequest, lastResult: pairResult, sendPairRequest, respondToRequest } = usePairing(alias);
   const {
@@ -151,13 +159,20 @@ export default function Home() {
   useEffect(() => {
     if (!isTauri()) return;
     (async () => {
-      const { documentDir, join } = await import("@tauri-apps/api/path");
       const { invoke } = await import("@tauri-apps/api/core");
+      // If the user already picked a folder (persisted), keep it — only
+      // resolve+create the default the very first time there's no choice yet.
+      if (hasStoredValue("download-path")) {
+        await invoke("ensure_download_dir", { path: downloadPath }).catch(() => {});
+        return;
+      }
+      const { documentDir, join } = await import("@tauri-apps/api/path");
       const docs = await documentDir();
       const path = await join(docs, "Envialo");
       await invoke("ensure_download_dir", { path });
       setDownloadPath(path);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -227,6 +242,8 @@ export default function Home() {
     if (quickSave === "on") handleAcceptIncomingTransfer(incomingTransferRequest);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingTransferRequest]);
+
+  useIncomingTransferNotifier(incomingTransferRequest, quickSave === "on");
 
   function buildReceivedRows(transferId: string, fromAlias: string, itemsSummary: { name: string; isDirectory: boolean; size: number }[]) {
     const now = new Date();

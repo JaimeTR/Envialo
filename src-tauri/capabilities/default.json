@@ -11,6 +11,8 @@
     "fs:default",
     "opener:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "autostart:default",
+    "notification:default"
   ]
 }
