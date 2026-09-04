@@ -28,6 +28,7 @@ pub fn run() {
       pairing::respond_pair_request,
       transfer::send_transfer,
       transfer::respond_transfer,
+      transfer::ensure_download_dir,
       webserver::start_web_server
     ])
     .setup(|app| {

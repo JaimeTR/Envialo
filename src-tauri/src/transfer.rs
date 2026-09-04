@@ -372,6 +372,11 @@ pub fn handle_transfer_offer(
 }
 
 #[tauri::command]
+pub fn ensure_download_dir(path: String) -> Result<(), String> {
+    fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn respond_transfer(
     app: AppHandle,
     state: State<TransferState>,

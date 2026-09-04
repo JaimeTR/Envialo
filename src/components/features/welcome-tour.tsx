@@ -43,6 +43,13 @@ const STEPS: TourStep[] = [
   {
     icon: Send,
     title: "Enviar",
+    body: "Esta sección es para mandar archivos, carpetas, texto o mensajes a cualquier equipo de tu red local.",
+    target: '[data-tour="nav-send"]',
+    tab: "send",
+  },
+  {
+    icon: Send,
+    title: "Elegir qué mandar",
     body: "Archivo o Carpeta abren el explorador para elegir qué mandar, Texto crea una nota rápida y Mensaje envía solo texto sin archivo. Después eliges el dispositivo destino, todo dentro del mismo modal. La primera vez con cada equipo, ambos confirman un código de emparejamiento.",
     target: '[data-tour="send-actions"]',
     tab: "send",

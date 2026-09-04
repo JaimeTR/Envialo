@@ -152,8 +152,11 @@ export default function Home() {
     if (!isTauri()) return;
     (async () => {
       const { documentDir, join } = await import("@tauri-apps/api/path");
+      const { invoke } = await import("@tauri-apps/api/core");
       const docs = await documentDir();
-      setDownloadPath(await join(docs, "Envialo"));
+      const path = await join(docs, "Envialo");
+      await invoke("ensure_download_dir", { path });
+      setDownloadPath(path);
     })();
   }, []);
 
@@ -964,7 +967,7 @@ export default function Home() {
                     label="Acceso desde celular"
                     description={
                       webServerUrl
-                        ? `Abre ${webServerUrl.ipUrl} en el navegador de tu celular (misma red). En iPhone/Mac también funciona ${webServerUrl.url}`
+                        ? `Abre ${webServerUrl.url} en el navegador de tu celular (misma red). Si no carga (Android u otro caso), usa la IP: ${webServerUrl.ipUrl}`
                         : "Solo disponible en la app de escritorio"
                     }
                     control={<Badge label={webServerUrl ? "Activo" : "Detenido"} variant={webServerUrl ? "success" : "neutral"} />}
