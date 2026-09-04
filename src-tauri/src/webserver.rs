@@ -207,8 +207,11 @@ const PAGE_HTML: &str = r##"<!doctype html>
   #bar-wrap { height: 6px; border-radius: 999px; background: #2c3349; overflow: hidden; margin-top: 10px; display: none; }
   #bar { height: 100%; width: 0%; background: linear-gradient(90deg,#5050e1,#7676ea); transition: width .15s ease; }
 
-  .alias-row { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
-  .alias-row input { margin: 0; }
+  .alias-row { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+  .alias-row label { text-align: center; font-size: 13px; margin-bottom: 8px; }
+  .alias-row input {
+    margin: 0; text-align: center; font-size: 17px; font-weight: 600; padding: 14px;
+  }
 
   .inbox-item {
     display: flex; align-items: center; gap: 12px; padding: 14px;
