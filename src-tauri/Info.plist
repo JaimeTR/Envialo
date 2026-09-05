@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Envialo necesita acceso a la red local para descubrir y conectarse a otros equipos con Envialo abierto, y para que tu celular pueda enviarte y recibir archivos.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_envialo._tcp.</string>
+		<string>_envialo-web._tcp.</string>
+	</array>
+</dict>
+</plist>

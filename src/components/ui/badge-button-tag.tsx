@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 export type BadgeVariant = "success" | "warning" | "error" | "info" | "neutral";
@@ -41,6 +41,9 @@ interface ButtonProps {
   onClick?: () => void;
   disabled?: boolean;
   fullWidth?: boolean;
+  /** Plays a left-to-right fill wipe (icon riding its trailing edge) instead of
+   * the plain label — for a "confirm and advance" moment like sending or paying. */
+  isAnimating?: boolean;
 }
 
 const buttonVariantStyles: Record<ButtonVariant, string> = {
@@ -52,6 +55,15 @@ const buttonVariantStyles: Record<ButtonVariant, string> = {
   danger: "bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800",
 };
 
+const wipeFillStyles: Record<ButtonVariant, string> = {
+  primary: "bg-blue-500",
+  secondary: "bg-slate-400/60 dark:bg-slate-500/60",
+  ghost: "bg-slate-300/50 dark:bg-slate-500/40",
+  outline: "bg-slate-200 dark:bg-slate-600/50",
+  success: "bg-emerald-500",
+  danger: "bg-rose-500",
+};
+
 export const StyledButton: React.FC<ButtonProps> = ({
   label,
   variant = "primary",
@@ -60,6 +72,7 @@ export const StyledButton: React.FC<ButtonProps> = ({
   onClick,
   disabled = false,
   fullWidth = false,
+  isAnimating = false,
 }) => {
   const sizeClass = {
     sm: "px-2.5 py-1.5 text-xs gap-1.5",
@@ -67,20 +80,51 @@ export const StyledButton: React.FC<ButtonProps> = ({
     lg: "px-4 py-2.5 text-base gap-2",
   }[size];
 
+  const [filled, setFilled] = useState(false);
+  useEffect(() => {
+    if (!isAnimating) {
+      setFilled(false);
+      return;
+    }
+    const raf = requestAnimationFrame(() => setFilled(true));
+    return () => cancelAnimationFrame(raf);
+  }, [isAnimating]);
+
   return (
     <button
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || isAnimating}
       className={cn(
-        "group font-semibold rounded-xl transition-colors flex items-center justify-center",
+        "group relative overflow-hidden font-semibold rounded-xl transition-colors flex items-center justify-center",
         sizeClass,
         fullWidth && "w-full",
         disabled && "opacity-50 cursor-not-allowed",
         buttonVariantStyles[variant]
       )}
     >
-      {icon && <span className="flex items-center transition-transform duration-200 group-hover:translate-x-1">{icon}</span>}
-      {label}
+      {isAnimating ? (
+        <>
+          <span className="invisible inline-flex items-center gap-2">
+            {icon}
+            {label}
+          </span>
+          <span className="absolute inset-0 inline-flex items-center justify-center gap-2">
+            {icon}
+            {label}
+          </span>
+          <span
+            className={cn("absolute inset-y-0 left-0 rounded-r-xl transition-[width] duration-500 ease-out", wipeFillStyles[variant])}
+            style={{ width: filled ? "100%" : "0%" }}
+          >
+            <span className="absolute inset-y-0 right-0 flex items-center pr-3">{icon}</span>
+          </span>
+        </>
+      ) : (
+        <>
+          {icon && <span className="flex items-center transition-transform duration-200 group-hover:translate-x-1">{icon}</span>}
+          {label}
+        </>
+      )}
     </button>
   );
 };

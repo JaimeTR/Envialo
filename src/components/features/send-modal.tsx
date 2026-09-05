@@ -26,9 +26,11 @@ export const SendModal: React.FC<SendModalProps> = ({
   onRemoveItem,
 }) => {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [isConfirming, setIsConfirming] = useState(false);
 
   function handleClose() {
     setSelectedDeviceId(null);
+    setIsConfirming(false);
     onClose();
   }
 
@@ -42,14 +44,20 @@ export const SendModal: React.FC<SendModalProps> = ({
       size="xl"
       footer={
         <>
-          <StyledButton label="Cancelar" variant="outline" onClick={handleClose} />
+          <StyledButton label="Cancelar" variant="outline" onClick={handleClose} disabled={isConfirming} />
           <StyledButton
             label="Enviar"
             icon={<Send className="w-4 h-4" />}
             disabled={items.length === 0 || !selectedDevice}
+            isAnimating={isConfirming}
             onClick={() => {
-              if (selectedDevice) onConfirm(selectedDevice);
-              setSelectedDeviceId(null);
+              if (!selectedDevice || isConfirming) return;
+              setIsConfirming(true);
+              setTimeout(() => {
+                onConfirm(selectedDevice);
+                setSelectedDeviceId(null);
+                setIsConfirming(false);
+              }, 500);
             }}
           />
         </>
